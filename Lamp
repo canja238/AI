@@ -1,0 +1,148 @@
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+
+// Pin Definitions
+const int led1GND = 11;       // First LED cathode (GND) pin
+const int led2GND = 10;       // Second LED cathode (GND) pin
+const int buttonPin = 8;      // Button input pin
+const int buzzerPin = 13;     // Buzzer pin
+
+// LCD (I2C address 0x27, 16 cols x 2 rows)
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+
+// Timing Constants
+const unsigned long twentyFiveMinutes = 1500000;  // 25 minutes in milliseconds
+const unsigned long fiveMinutes = 300000;         // 5 minutes in milliseconds
+const unsigned long oneMinute = 30000;            // 1 minute in milliseconds
+const unsigned long longPressThreshold = 2000;    // 3 seconds for long press
+
+// State Management
+enum State { IDLE, PHASE1, PHASE2 };
+State currentState = IDLE;
+
+unsigned long startTime = 0;
+unsigned long buttonPressTime = 0;
+bool buttonPressed = false; // To ensure the button is pressed only once
+bool isLongPress = false;   // To detect long press
+
+void setup() {
+  pinMode(led1GND, OUTPUT);
+  pinMode(led2GND, OUTPUT);
+  pinMode(buzzerPin, OUTPUT);
+  pinMode(buttonPin, INPUT_PULLUP); // button pressed = LOW
+
+  digitalWrite(led1GND, LOW);
+  digitalWrite(led2GND, LOW);
+  digitalWrite(buzzerPin, LOW);
+
+  // Initialize LCD
+  lcd.begin(16, 2);
+  lcd.backlight();
+  lcd.setCursor(0, 0);
+  lcd.print("System Ready");
+  lcd.setCursor(0, 1);
+  lcd.print("Press Button");
+}
+
+void loop() {
+  unsigned long currentMillis = millis();
+  bool buttonState = digitalRead(buttonPin) == LOW; // Button pressed = LOW
+  
+  if (buttonState) {
+    // If button is pressed, record the time
+    if (buttonPressTime == 0) {
+      buttonPressTime = currentMillis;
+    }
+
+    // Check if the button is being held long enough for a reset
+    if (currentMillis - buttonPressTime > longPressThreshold && !isLongPress) {
+      isLongPress = true; // Long press detected
+      resetCycle(); // Restart the cycle immediately
+    }
+  } else {
+    // If the button is released, reset buttonPressTime
+    buttonPressTime = 0;
+    isLongPress = false;
+  }
+
+  // Start process when button is pressed (only once and not long press)
+  if (buttonState && !buttonPressed && !isLongPress) {
+    buttonPressed = true;
+    startTime = currentMillis;
+    currentState = PHASE1;
+    digitalWrite(led1GND, HIGH); // Turn on LED1
+    lcd.clear();
+  }
+
+  if (currentState == PHASE1) {
+    unsigned long elapsed = currentMillis - startTime;
+
+    if (elapsed >= twentyFiveMinutes) {
+      // Transition to PHASE2
+      digitalWrite(led1GND, LOW); // Turn off LED1
+      digitalWrite(led2GND, HIGH); // Turn on LED2
+      digitalWrite(buzzerPin, HIGH); // Turn on Buzzer
+      startTime = currentMillis;
+      currentState = PHASE2;
+      lcd.clear();
+    } else {
+      displayTimer("Study Time", twentyFiveMinutes - elapsed);
+    }
+  }
+
+  if (currentState == PHASE2) {
+    unsigned long elapsed = currentMillis - startTime;
+
+    if (elapsed >= fiveMinutes) {
+      // After 5 minutes, turn off LED2 and buzzer
+      digitalWrite(led2GND, LOW);
+      digitalWrite(buzzerPin, LOW);
+
+      // Start the 25-minute phase again with LED1
+      currentState = PHASE1;
+      lcd.clear();
+    } else if (elapsed >= oneMinute) {
+      // After 1 minute, buzzer will stop
+      digitalWrite(buzzerPin, LOW);
+      displayTimer("Rest Time", fiveMinutes - elapsed);
+    } else {
+      displayTimer("Rest Time", fiveMinutes - elapsed);
+    }
+  }
+
+  if (currentState == IDLE) {
+    lcd.setCursor(0, 0);
+    lcd.print("Press Button    ");
+  }
+}
+
+void displayTimer(const char* phase, unsigned long remainingMs) {
+  int seconds = (remainingMs / 1000) % 60;
+  int minutes = (remainingMs / 1000) / 60;
+
+  lcd.setCursor(0, 0);
+  lcd.print(phase);
+  lcd.setCursor(0, 1);
+  lcd.print("Time: ");
+  if (minutes < 10) lcd.print("0");
+  lcd.print(minutes);
+  lcd.print(":");
+  if (seconds < 10) lcd.print("0");
+  lcd.print(seconds);
+  lcd.print("   "); // clear any leftover digits
+}
+
+void resetCycle() {
+  // Reset everything
+  currentState = IDLE;
+  buttonPressed = false;
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("System Reset");
+  lcd.setCursor(0, 1);
+  lcd.print("Press Button");
+  digitalWrite(led1GND, LOW);
+  digitalWrite(led2GND, LOW);
+  digitalWrite(buzzerPin, LOW);
+  delay(2000); // Show reset message for 2 seconds before going back to idle
+}
