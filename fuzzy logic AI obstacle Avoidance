@@ -1,0 +1,209 @@
+#define TRIGGER1 7
+#define ECHO1 9
+#define TRIGGER2 12
+#define ECHO2 13
+#define TRIGGER3 10
+#define ECHO3 11
+
+byte leftDIO = 2;    // Direction pin for left motor
+byte leftPWM = 5;    // PWM pin for left motor
+byte rightDIO = 4;   // Direction pin for right motor
+byte rightPWM = 6;   // PWM pin for right motor
+
+double sonarValues[3];
+double DOM[3][3];    // Degree of Membership for each sensor
+double RULES[9];     // Fuzzy rules
+double WL[9];        // Left motor weights
+double WR[9];        // Right motor weights
+
+double tempSummationL = 0;
+double tempSummationR = 0;
+double tempSummation = 0;
+
+double YL = 0;        // Defuzzified value for left motor
+double YR = 0;        // Defuzzified value for right motor
+
+long duration;
+double distance;
+
+// Function to measure distance using an ultrasonic sensor
+double measureDistance(int triggerPin, int echoPin) {
+  digitalWrite(triggerPin, LOW);
+  delayMicroseconds(2);
+  digitalWrite(triggerPin, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(triggerPin, LOW);
+
+  duration = pulseIn(echoPin, HIGH);
+  return (duration / 2.0) * 0.0343;  // Convert time to distance in cm
+}
+
+// Function to drive the motors
+void driveMotor(int pwmPin, int dirPin, double speed) {
+  if (pwmPin == rightPWM) {
+    // Invert direction for right motor
+    if (speed >= 0) {
+      digitalWrite(dirPin, LOW);  // Reverse (invert logic for right motor)
+      analogWrite(pwmPin, (int)(speed * 2.55));  // Map to PWM range 0-255
+    } else {
+      digitalWrite(dirPin, HIGH);   // Forward (invert logic for right motor)
+      analogWrite(pwmPin, (int)(-speed * 2.55));  // Map to PWM range 0-255
+    }
+  } else {
+    // Standard logic for left motor
+    if (speed >= 0) {
+      digitalWrite(dirPin, HIGH);  // Forward
+      analogWrite(pwmPin, (int)(speed * 2.55));  // Map to PWM range 0-255
+    } else {
+      digitalWrite(dirPin, LOW);   // Reverse
+      analogWrite(pwmPin, (int)(-speed * 2.55));  // Map to PWM range 0-255
+    }
+  }
+}
+
+void setup() {
+  // Start serial communication for output
+  Serial.begin(9600);
+
+  // Initialize the trigger and echo pins for each sensor
+  pinMode(TRIGGER1, OUTPUT);
+  pinMode(ECHO1, INPUT);
+  pinMode(TRIGGER2, OUTPUT);
+  pinMode(ECHO2, INPUT);
+  pinMode(TRIGGER3, OUTPUT);
+  pinMode(ECHO3, INPUT);
+
+  // Initialize motor pins
+  pinMode(leftDIO, OUTPUT);
+  pinMode(leftPWM, OUTPUT);
+  pinMode(rightDIO, OUTPUT);
+  pinMode(rightPWM, OUTPUT);
+
+  Serial.println();
+}
+
+void loop() {
+  // Measure distance from each sonar
+  sonarValues[0] = measureDistance(TRIGGER1, ECHO1);
+  sonarValues[1] = measureDistance(TRIGGER2, ECHO2);
+  sonarValues[2] = measureDistance(TRIGGER3, ECHO3);
+
+  // Display sonar values for debugging
+  for (int iCounter = 0; iCounter < 3; iCounter++) {
+    Serial.print("sonar value [");
+    Serial.print(iCounter);
+    Serial.print("] = ");
+    Serial.println(sonarValues[iCounter]);
+  }
+
+  // Calculate Degree of Membership (DOM) for each sensor
+  for (int sensorCounter = 0; sensorCounter < 3; sensorCounter++) {
+    if (sonarValues[sensorCounter] <= 10) {
+      DOM[sensorCounter][0] = 1;
+      DOM[sensorCounter][1] = 0;
+      DOM[sensorCounter][2] = 0;
+    } else if (sonarValues[sensorCounter] <= 20) {
+      DOM[sensorCounter][0] = 1 - ((sonarValues[sensorCounter] - 10) / 10.0);
+      DOM[sensorCounter][1] = 1 - DOM[sensorCounter][0];
+      DOM[sensorCounter][2] = 0;
+    } else if (sonarValues[sensorCounter] <= 60) {
+      DOM[sensorCounter][0] = 0;
+      DOM[sensorCounter][1] = 1;
+      DOM[sensorCounter][2] = 0;
+    } else if (sonarValues[sensorCounter] <= 80) {
+      DOM[sensorCounter][0] = 0;
+      DOM[sensorCounter][1] = 1 - ((sonarValues[sensorCounter] - 60) / 20.0);
+      DOM[sensorCounter][2] = 1 - DOM[sensorCounter][1];
+    } else {
+      DOM[sensorCounter][0] = 0;
+      DOM[sensorCounter][1] = 0;
+      DOM[sensorCounter][2] = 1;
+    }
+  }
+
+  // Display DOM values for debugging
+  for (int sensorCounter = 0; sensorCounter < 3; sensorCounter++) {
+    for (int linVarCounter = 0; linVarCounter < 3; linVarCounter++) {
+      Serial.print("DOM [");
+      Serial.print(sensorCounter);
+      Serial.print("][");
+      Serial.print(linVarCounter);
+      Serial.print("] = ");
+      Serial.print(DOM[sensorCounter][linVarCounter]);
+      Serial.print("  ");
+    }
+    Serial.println();
+  }
+
+  // Define fuzzy rules: More granular control
+  RULES[0] = DOM[0][0] * DOM[1][0] * DOM[2][0];
+  WL[0] = -100;
+  WR[0] = -100;
+
+  RULES[1] = DOM[0][2] * DOM[1][2] * DOM[2][0];
+  WL[1] = 100;
+  WR[1] = -100;
+
+  RULES[2] = DOM[0][0] * DOM[1][2] * DOM[2][2];
+  WL[2] = -100;
+  WR[2] = 100;
+
+  RULES[3] = DOM[0][1] * DOM[1][1] * DOM[2][1];
+  WL[3] = -50;
+  WR[3] = 50;
+
+  RULES[4] = DOM[0][1] * DOM[1][2] * DOM[2][0];
+  WL[4] = 75;
+  WR[4] = 25;
+
+  RULES[5] = DOM[0][0] * DOM[1][2] * DOM[2][1];
+  WL[5] = 25;
+  WR[5] = 75;
+
+  RULES[6] = DOM[0][2] * DOM[1][2] * DOM[2][2];
+  WL[6] = 100;
+  WR[6] = 100;
+
+  RULES[7] = DOM[0][2] * DOM[1][2] * DOM[2][1];
+  WL[7] = 100;
+  WR[7] = 50;
+
+  RULES[8] = DOM[0][1] * DOM[1][2] * DOM[2][2];
+  WL[8] = 50;
+  WR[8] = 100;
+
+  
+
+  // Calculate defuzzified outputs for left and right wheels (YL and YR)
+  for (int iCounter = 0; iCounter < 9; iCounter++) {
+    tempSummationL += RULES[iCounter] * WL[iCounter];
+    tempSummationR += RULES[iCounter] * WR[iCounter];
+    tempSummation += RULES[iCounter];
+  }
+
+  if (tempSummation != 0) {
+    YL = tempSummationL / tempSummation;
+    YR = tempSummationR / tempSummation;
+  } else {
+    YL = 0;
+    YR = 0;
+  }
+
+  // Output the results to Serial Monitor
+  Serial.print("YL = ");
+  Serial.print(YL);
+  Serial.print("      YR = ");
+  Serial.println(YR);
+
+  // Drive the motors based on the calculated values
+  driveMotor(leftPWM, leftDIO, YL);
+  driveMotor(rightPWM, rightDIO, YR);
+
+  // Reset summations for the next loop
+  tempSummationL = 0;
+  tempSummationR = 0;
+  tempSummation = 0;
+
+  // Wait a bit before taking new sensor measurements
+  delay(3000);
+}
